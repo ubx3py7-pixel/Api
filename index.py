@@ -2,37 +2,33 @@ from flask import Flask, request, jsonify
 import sqlite3
 import os
 import tempfile
-import urllib.request
+import requests
 
 app = Flask(__name__)
 
 # ================= CONFIG =================
 DRIVE_FILE_ID = os.environ.get('DRIVE_FILE_ID', '1int8ppAHK6elB66jSrwIGyA741-mK4Zk')
-DRIVE_URL = f"https://drive.google.com/uc?export=download&id={DRIVE_FILE_ID}"
 
 
 # ================= DB HELPER =================
-def download_drive_file(url, dest_path):
-    """Download from Google Drive, handling virus-scan confirmation page"""
-    opener = urllib.request.build_opener()
-    opener.addheaders = [('User-Agent', 'Mozilla/5.0')]
-    urllib.request.install_opener(opener)
+def download_drive_file(file_id, dest_path):
+    """Download from Google Drive properly handling redirect/confirmation"""
+    session = requests.Session()
+    url = f"https://drive.google.com/uc?export=download&id={file_id}"
 
-    # First request
-    response = opener.open(url)
-    content = response.read()
+    response = session.get(url, stream=True)
 
-    # If Google shows virus-scan warning, extract confirm token and retry
-    if b'confirm=' in content and b'google' in content:
-        import re
-        token = re.search(rb'confirm=([0-9A-Za-z_\-]+)', content)
-        if token:
-            confirm_url = url + '&confirm=' + token.group(1).decode()
-            response = opener.open(confirm_url)
-            content = response.read()
+    # Handle virus scan warning page
+    for key, value in response.cookies.items():
+        if key.startswith('download_warning'):
+            url = f"https://drive.google.com/uc?export=download&id={file_id}&confirm={value}"
+            response = session.get(url, stream=True)
+            break
 
     with open(dest_path, 'wb') as f:
-        f.write(content)
+        for chunk in response.iter_content(chunk_size=32768):
+            if chunk:
+                f.write(chunk)
 
 
 def get_db_connection():
@@ -41,7 +37,7 @@ def get_db_connection():
     tmp_path = tmp.name
     tmp.close()
 
-    download_drive_file(DRIVE_URL, tmp_path)
+    download_drive_file(DRIVE_FILE_ID, tmp_path)
 
     conn = sqlite3.connect(tmp_path)
     conn.row_factory = sqlite3.Row
@@ -92,7 +88,7 @@ def get_user(user_id):
         return jsonify({"error": str(e)}), 500
 
 
-# ================= SEARCH BY USERNAME =================
+# ================= SEARCH =================
 @app.route('/api/users/search', methods=['GET'])
 def search_users():
     query = request.args.get('q', '')
@@ -122,7 +118,7 @@ def search_users():
 # ================= HEALTH CHECK =================
 @app.route('/api/health', methods=['GET'])
 def health():
-    return jsonify({"status": "ok", "source": DRIVE_URL}), 200
+    return jsonify({"status": "ok", "file_id": DRIVE_FILE_ID}), 200
 
 
 if __name__ == '__main__':

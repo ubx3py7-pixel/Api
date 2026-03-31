@@ -12,13 +12,36 @@ DRIVE_URL = f"https://drive.google.com/uc?export=download&id={DRIVE_FILE_ID}"
 
 
 # ================= DB HELPER =================
+def download_drive_file(url, dest_path):
+    """Download from Google Drive, handling virus-scan confirmation page"""
+    opener = urllib.request.build_opener()
+    opener.addheaders = [('User-Agent', 'Mozilla/5.0')]
+    urllib.request.install_opener(opener)
+
+    # First request
+    response = opener.open(url)
+    content = response.read()
+
+    # If Google shows virus-scan warning, extract confirm token and retry
+    if b'confirm=' in content and b'google' in content:
+        import re
+        token = re.search(rb'confirm=([0-9A-Za-z_\-]+)', content)
+        if token:
+            confirm_url = url + '&confirm=' + token.group(1).decode()
+            response = opener.open(confirm_url)
+            content = response.read()
+
+    with open(dest_path, 'wb') as f:
+        f.write(content)
+
+
 def get_db_connection():
     """Download DB from Drive into /tmp and return connection"""
     tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
     tmp_path = tmp.name
     tmp.close()
 
-    urllib.request.urlretrieve(DRIVE_URL, tmp_path)
+    download_drive_file(DRIVE_URL, tmp_path)
 
     conn = sqlite3.connect(tmp_path)
     conn.row_factory = sqlite3.Row
